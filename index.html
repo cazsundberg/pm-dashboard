@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PM Dashboard</title>
+
+  <!-- Prevent search engines from indexing -->
+  <meta name="robots" content="noindex, nofollow">
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 20px;
+      font-size: 14px;
+    }
+
+    h2 {
+      margin-bottom: 10px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    label {
+      font-size: 13px;
+    }
+
+    input, button {
+      padding: 6px;
+      font-size: 13px;
+    }
+
+    button {
+      cursor: pointer;
+      background: #424242;
+      color: white;
+      border: none;
+      border-radius: 4px;
+    }
+
+    #status {
+      font-size: 13px;
+      margin: 6px 0 12px;
+      white-space: pre-line;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+
+    th, td {
+      padding: 6px 8px;
+      border: 1px solid #ddd;
+      font-size: 13px;
+      text-align: left;
+    }
+
+    th {
+      background: #f5f5f5;
+    }
+
+    tr.overdue {
+      background: #ffeaea;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-right: 4px;
+    }
+
+    .tag-ok {
+      background: #e0f7e9;
+      color: #1b6e2d;
+    }
+
+    .tag-bad {
+      background: #ffe1e1;
+      color: #a11a1a;
+    }
+  </style>
+
+  <script>
+    /* ---------------------------------------------
+       SIMPLE PASSWORD PROTECTION
+       --------------------------------------------- */
+
+    const DASHBOARD_PASSWORD = "caz-is-best-pm";  // <-- EDIT THIS PASSWORD
+
+    const entered = prompt("PM Dashboard – Enter password:");
+
+    if (entered !== DASHBOARD_PASSWORD) {
+      document.write("<h2>Access denied</h2>");
+      document.close();
+    }
+  </script>
+
+</head>
+<body>
+
+  <h2>PM Dashboard</h2>
+
+  <div class="controls">
+    <label>
+      Date:
+      <input type="date" id="dateInput">
+    </label>
+
+    <label>
+      PM:
+      <input type="text" id="pmInput" placeholder="Caz">
+    </label>
+
+    <button id="loadBtn">Load</button>
+  </div>
+
+  <div id="status"></div>
+
+  <table id="resultsTable">
+    <thead>
+      <tr>
+        <th>Project</th>
+        <th>Ep</th>
+        <th>PM</th>
+        <th>TL Deadline</th>
+        <th>TL Status</th>
+        <th>Overdue?</th>
+        <th>TS Deadline</th>
+        <th>QC Deadline</th>
+        <th>Last Synced</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    /* ---------------------------------------------
+       DASHBOARD FUNCTIONALITY
+       --------------------------------------------- */
+
+    const WEBAPP_URL = "YOUR_WEBAPP_EXEC_URL_HERE";  
+    // Example:
+    // "https://script.google.com/macros/s/AKfycb....../exec"
+
+    function setStatus(msg) {
+      document.getElementById("status").textContent = msg;
+    }
+
+    async function fetchDeadlines(dateStr, pm) {
+      const params = new URLSearchParams({
+        action: "deadlinesForDate",
+        date: dateStr
+      });
+
+      if (pm) params.set("pm", pm);
+
+      const res = await fetch(WEBAPP_URL + "?" + params.toString());
+      return res.json();
+    }
+
+    function renderTable(rows) {
+      const tbody = document.querySelector("#resultsTable tbody");
+      tbody.innerHTML = "";
+
+      rows.forEach(row => {
+        const tr = document.createElement("tr");
+        if (row.overdue) tr.classList.add("overdue");
+
+        const tlTag = document.createElement("span");
+        tlTag.classList.add("tag");
+        if (row.tlTPressed) {
+          tlTag.classList.add("tag-ok");
+          tlTag.textContent = "DONE";
+        } else {
+          tlTag.classList.add("tag-bad");
+          tlTag.textContent = "NOT DONE";
+        }
+
+        const overdueTag = document.createElement("span");
+        overdueTag.classList.add("tag");
+        if (row.overdue) {
+          overdueTag.classList.add("tag-bad");
+          overdueTag.textContent = "OVERDUE";
+        } else {
+          overdueTag.classList.add("tag-ok");
+          overdueTag.textContent = "OK";
+        }
+
+        const syncedStr = row.syncedAt
+          ? new Date(row.syncedAt).toLocaleString()
+          : "";
+
+        tr.innerHTML = `
+          <td>${row.projectName}</td>
+          <td>${row.epNo}</td>
+          <td>${row.pm || ""}</td>
+          <td>${row.tlDeadline}</td>
+          <td class="tlcell"></td>
+          <td class="overduecell"></td>
+          <td>${row.tsDeadline || ""}</td>
+          <td>${row.qcDeadline || ""}</td>
+          <td>${syncedStr}</td>
+        `;
+
+        tr.querySelector(".tlcell").appendChild(tlTag);
+        tr.querySelector(".overduecell").appendChild(overdueTag);
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById("loadBtn").addEventListener("click", async () => {
+      const dateStr = document.getElementById("dateInput").value;
+      const pm = document.getElementById("pmInput").value.trim();
+
+      if (!dateStr) {
+        setStatus("Please choose a date.");
+        return;
+      }
+
+      setStatus("Loading…");
+
+      try {
+        const data = await fetchDeadlines(dateStr, pm);
+
+        if (!data.ok) {
+          setStatus("Error: " + data.error);
+          return;
+        }
+
+        const rows = data.rows || [];
+        setStatus(`Date: ${data.date} | PM: ${data.pm || "(all)"} | Rows: ${rows.length}`);
+        renderTable(rows);
+
+      } catch (err) {
+        console.error(err);
+        setStatus("Failed to load data. Check console.");
+      }
+    });
+
+    // Default: set date to today
+    (function init() {
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, "0");
+      const dd = String(today.getDate()).padStart(2, "0");
+      document.getElementById("dateInput").value = `${yyyy}-${mm}-${dd}`;
+
+      // PM autoload from localStorage
+      const pmInput = document.getElementById("pmInput");
+      const savedPm = localStorage.getItem("pmDashboardPm");
+      if (savedPm) pmInput.value = savedPm;
+
+      pmInput.addEventListener("change", () => {
+        localStorage.setItem("pmDashboardPm", pmInput.value.trim());
+      });
+    })();
+  </script>
+
+</body>
+</html>
