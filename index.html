@@ -180,8 +180,8 @@
     }
 
     function openScanTab(projectId, scanId) {
-      const url = `${TMS_BASE}${projectId}?l=en_US&scan=1&scanId=${encodeURIComponent(scanId)}`;
-      window.open(url, "_blank");
+      const url = `${TMS_BASE}${pid}?l=en_US&scan=1&scanId=${encodeURIComponent(scanId)}`;
+window.open(url, "_blank");
     }
 
     async function openTabsWithConcurrency(projectIds, scanId) {
