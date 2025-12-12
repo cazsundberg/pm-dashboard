@@ -166,14 +166,14 @@
     }
 
     async function fetchScanResults(scanId) {
-      const url = new URL(WEBAPP_URL);
-      url.searchParams.set("action", "scanResults");
-      url.searchParams.set("scanId", scanId);
-      const res = await fetch(url.toString());
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "scanResults failed");
-      return data.rows || [];
-    }
+  const url = new URL(WEBAPP_URL);
+  url.searchParams.set("action", "scanResults");
+  url.searchParams.set("scanId", scanId);   // <-- REQUIRED now
+  const res = await fetch(url.toString());
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Unknown error");
+  return data.rows || [];
+}
 
     function uniqueProjectIds(rows) {
       return Array.from(new Set(rows.map(r => String(r.projectId).trim()))).filter(Boolean);
