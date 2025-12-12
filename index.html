@@ -7,11 +7,12 @@
     body { font-family: system-ui, sans-serif; padding: 16px; }
     label { margin-right: 8px; }
     input, button, select { margin: 4px; }
-    table { border-collapse: collapse; margin-top: 12px; width: 100%; max-width: 1000px; }
+    table { border-collapse: collapse; margin-top: 12px; width: 100%; max-width: 1100px; }
     th, td { border: 1px solid #ccc; padding: 4px 6px; font-size: 12px; }
     th { background: #f3f3f3; }
     .status-done { background: #e0f7e9; }
     .status-missing { background: #ffe0e0; }
+    .muted { color: #666; font-size: 12px; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -25,19 +26,22 @@
     <input type="text" id="pmInput" placeholder="(optional)" value="Caz" />
 
     <button id="loadDueBtn">Load due list</button>
-    <button id="scanBtn" disabled>Scan & Refresh</button>
+
+    <button id="scanYesterdayBtn">Scan yesterday</button>
+    <button id="scanSelectedBtn">Scan selected date</button>
+    <button id="scanWeekendBtn">Scan weekend</button>
   </div>
 
-  <div id="info"></div>
+  <div id="info" class="muted"></div>
 
   <table id="dueTable">
     <thead>
       <tr>
+        <th>TLDeadline</th>
         <th>ProjectId</th>
         <th>ProjectName</th>
         <th>EpNo</th>
         <th>PM</th>
-        <th>TLDeadline</th>
         <th>T Pressed?</th>
       </tr>
     </thead>
@@ -45,42 +49,51 @@
   </table>
 
   <script>
-    // TODO: paste your Web App URL here:
-    const WEBAPP_URL = "https://script.google.com/macros/s/YOUR_DEPLOY_ID/exec";
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycby7jrwI9hUanx9EMZnguqjU14WkONUeYyqcqNDkalooCjQIn_i-wMTLYeI8vrvzDNSL/exec";
     const TMS_BASE   = "https://tms.kiledel.com/project/";
+    const CONCURRENCY = 5;
+    const POLL_TIMEOUT_MS = 45000;
 
     const dateInput = document.getElementById("dateInput");
     const pmInput   = document.getElementById("pmInput");
     const loadDueBtn = document.getElementById("loadDueBtn");
-    const scanBtn    = document.getElementById("scanBtn");
+    const scanYesterdayBtn = document.getElementById("scanYesterdayBtn");
+    const scanSelectedBtn  = document.getElementById("scanSelectedBtn");
+    const scanWeekendBtn   = document.getElementById("scanWeekendBtn");
     const infoDiv    = document.getElementById("info");
     const dueTableBody = document.querySelector("#dueTable tbody");
 
-    // Store the last due list in memory so we can merge scan results
     let currentDueRows = [];
+
+    function toISODate(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    function parseISO(str) {
+      // yyyy-mm-dd -> local date
+      const [y, m, d] = str.split("-").map(Number);
+      return new Date(y, m - 1, d);
+    }
 
     function setYesterdayDefault() {
       const d = new Date();
       d.setDate(d.getDate() - 1);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      dateInput.value = `${y}-${m}-${day}`;
+      dateInput.value = toISODate(d);
     }
 
-    async function fetchDueList() {
-      const dateStr = dateInput.value;
+    function makeScanId() {
+      return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    }
+
+    function sleep(ms) {
+      return new Promise(r => setTimeout(r, ms));
+    }
+
+    async function fetchDueListFor(dateStr) {
       const pm = pmInput.value.trim();
-
-      if (!dateStr) {
-        alert("Please pick a date.");
-        return;
-      }
-
-      infoDiv.textContent = "Loading due list...";
-      dueTableBody.innerHTML = "";
-      scanBtn.disabled = true;
-      currentDueRows = [];
 
       const url = new URL(WEBAPP_URL);
       url.searchParams.set("action", "dueList");
@@ -89,22 +102,32 @@
 
       const res = await fetch(url.toString());
       const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "dueList failed");
+      return data.rows || [];
+    }
 
-      if (!data.ok) {
-        infoDiv.textContent = "Error loading due list: " + (data.error || "Unknown error");
-        return;
+    async function loadDueListUI() {
+      const dateStr = dateInput.value;
+      if (!dateStr) return alert("Please pick a date.");
+
+      infoDiv.textContent = "Loading due list...";
+      dueTableBody.innerHTML = "";
+      currentDueRows = [];
+
+      try {
+        const rows = await fetchDueListFor(dateStr);
+        currentDueRows = rows;
+        infoDiv.textContent =
+          `Found ${rows.length} episode(s) due on ${dateStr}` +
+          (pmInput.value.trim() ? ` for PM ${pmInput.value.trim()}` : "");
+
+        renderDueTable(rows, []);
+      } catch (e) {
+        infoDiv.textContent = "Error: " + e.toString();
       }
-
-      currentDueRows = data.rows || [];
-      infoDiv.textContent = `Found ${currentDueRows.length} episode(s) due on ${dateStr}` +
-        (pm ? ` for PM ${pm}` : "");
-
-      renderDueTable(currentDueRows, []); // no scan results yet
-      scanBtn.disabled = !currentDueRows.length;
     }
 
     function renderDueTable(dueRows, scanRows) {
-      // Build quick lookup for scan results: key = projectId + '__' + epNo
       const scanMap = {};
       scanRows.forEach(r => {
         const key = `${r.projectId}__${r.epNo}`;
@@ -112,7 +135,6 @@
       });
 
       dueTableBody.innerHTML = "";
-
       dueRows.forEach(row => {
         const key = `${row.projectId}__${row.epNo}`;
         const scan = scanMap[key];
@@ -123,14 +145,13 @@
         if (tPressed === false) tr.classList.add("status-missing");
 
         tr.innerHTML = `
+          <td>${row.tlDeadline || ""}</td>
           <td>${row.projectId}</td>
           <td>${row.projectName}</td>
           <td>${row.epNo}</td>
           <td>${row.pm || ""}</td>
-          <td>${row.tlDeadline || ""}</td>
           <td>${tPressed === null ? "" : (tPressed ? "✔️" : "❌")}</td>
         `;
-
         dueTableBody.appendChild(tr);
       });
     }
@@ -140,66 +161,161 @@
       url.searchParams.set("action", "clearScanResult");
       const res = await fetch(url.toString());
       const data = await res.json();
-      return data.ok;
+      if (!data.ok) throw new Error(data.error || "clearScanResult failed");
+      return true;
     }
 
-    function openScanTabsForDueRows(dueRows) {
-      const projectIds = Array.from(new Set(dueRows.map(r => r.projectId)));
-      projectIds.forEach(pid => {
-        const url = `${TMS_BASE}${pid}?l=en_US&scan=1`;
-        window.open(url, "_blank");
-      });
-    }
-
-    async function fetchScanResults() {
+    async function fetchScanResults(scanId) {
       const url = new URL(WEBAPP_URL);
       url.searchParams.set("action", "scanResults");
+      url.searchParams.set("scanId", scanId);
       const res = await fetch(url.toString());
       const data = await res.json();
-      if (!data.ok) {
-        throw new Error(data.error || "Unknown error");
-      }
+      if (!data.ok) throw new Error(data.error || "scanResults failed");
       return data.rows || [];
     }
 
-    async function runScan() {
-      if (!currentDueRows.length) {
-        alert("No due rows loaded.");
-        return;
-      }
-
-      infoDiv.textContent = "Clearing previous scan results...";
-      scanBtn.disabled = true;
-
-      const cleared = await clearScanResultOnServer();
-      if (!cleared) {
-        infoDiv.textContent = "Failed to clear previous scan results.";
-        scanBtn.disabled = false;
-        return;
-      }
-
-      infoDiv.textContent = "Opening TMS tabs to scan...";
-      openScanTabsForDueRows(currentDueRows);
-
-      // Give the tabs some time to load and send snapshots
-      // You can tweak this delay.
-      setTimeout(async () => {
-        infoDiv.textContent = "Fetching scan results...";
-        try {
-          const scanRows = await fetchScanResults();
-          infoDiv.textContent = `Scan complete: ${scanRows.length} snapshot row(s) received.`;
-          renderDueTable(currentDueRows, scanRows);
-        } catch (err) {
-          console.error(err);
-          infoDiv.textContent = "Error fetching scan results: " + err.toString();
-        } finally {
-          scanBtn.disabled = false;
-        }
-      }, 8000); // 8 seconds delay for safety
+    function uniqueProjectIds(rows) {
+      return Array.from(new Set(rows.map(r => String(r.projectId).trim()))).filter(Boolean);
     }
 
-    loadDueBtn.addEventListener("click", fetchDueList);
-    scanBtn.addEventListener("click", runScan);
+    function openScanTab(projectId, scanId) {
+      const url = `${TMS_BASE}${projectId}?l=en_US&scan=1&scanId=${encodeURIComponent(scanId)}`;
+      window.open(url, "_blank");
+    }
+
+    async function openTabsWithConcurrency(projectIds, scanId) {
+      // Open in batches of CONCURRENCY
+      for (let i = 0; i < projectIds.length; i += CONCURRENCY) {
+        const batch = projectIds.slice(i, i + CONCURRENCY);
+        batch.forEach(pid => openScanTab(pid, scanId));
+
+        // Small pause so the browser doesn’t freak out
+        await sleep(800);
+      }
+    }
+
+    async function pollForResults(scanId, expectedProjectIds) {
+      const start = Date.now();
+      let lastRows = [];
+
+      while (Date.now() - start < POLL_TIMEOUT_MS) {
+        const rows = await fetchScanResults(scanId);
+        lastRows = rows;
+
+        const seenProjects = new Set(rows.map(r => String(r.projectId).trim()));
+        const doneCount = expectedProjectIds.filter(pid => seenProjects.has(String(pid).trim())).length;
+
+        infoDiv.textContent = `Scanning... got results from ${doneCount}/${expectedProjectIds.length} project(s).`;
+
+        if (doneCount >= expectedProjectIds.length) return rows;
+        await sleep(1200);
+      }
+
+      infoDiv.textContent = `Timed out after ${Math.round(POLL_TIMEOUT_MS/1000)}s. Showing partial results.`;
+      return lastRows;
+    }
+
+    async function runScanForRows(dueRows, labelForInfo) {
+      if (!dueRows.length) {
+        infoDiv.textContent = `No due rows for ${labelForInfo}.`;
+        renderDueTable(dueRows, []);
+        return;
+      }
+
+      const scanId = makeScanId();
+      const projectIds = uniqueProjectIds(dueRows);
+
+      infoDiv.textContent = "Clearing previous scan results...";
+      await clearScanResultOnServer();
+
+      infoDiv.textContent = `Opening ${projectIds.length} project tab(s) (cap ${CONCURRENCY} at a time)...`;
+      await openTabsWithConcurrency(projectIds, scanId);
+
+      // Give tabs a moment to start posting
+      await sleep(1500);
+
+      const scanRows = await pollForResults(scanId, projectIds);
+      infoDiv.textContent = `Scan complete: received ${scanRows.length} row(s).`;
+      renderDueTable(dueRows, scanRows);
+    }
+
+    // Weekend logic: find the weekend (Sat+Sun) immediately before/including selected date
+    function getWeekendDatesFromSelected(selectedISO) {
+      const d = parseISO(selectedISO);
+      const day = d.getDay(); // Sun=0 ... Sat=6
+
+      // Find Saturday of that weekend
+      // If selected is Sat (6): sat = today
+      // If selected is Sun (0): sat = yesterday
+      // Else (Mon-Fri): sat = previous Saturday
+      const sat = new Date(d);
+      if (day === 6) sat.setDate(d.getDate());
+      else if (day === 0) sat.setDate(d.getDate() - 1);
+      else sat.setDate(d.getDate() - (day + 1));
+
+      const sun = new Date(sat);
+      sun.setDate(sat.getDate() + 1);
+
+      return { satISO: toISODate(sat), sunISO: toISODate(sun) };
+    }
+
+    // Button handlers
+    loadDueBtn.addEventListener("click", loadDueListUI);
+
+    scanYesterdayBtn.addEventListener("click", async () => {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      const iso = toISODate(d);
+      dateInput.value = iso;
+
+      try {
+        infoDiv.textContent = "Loading due list for yesterday...";
+        const rows = await fetchDueListFor(iso);
+        currentDueRows = rows;
+        renderDueTable(rows, []);
+        await runScanForRows(rows, `yesterday (${iso})`);
+      } catch (e) {
+        infoDiv.textContent = "Error: " + e.toString();
+      }
+    });
+
+    scanSelectedBtn.addEventListener("click", async () => {
+      const iso = dateInput.value;
+      if (!iso) return alert("Pick a date first.");
+
+      try {
+        infoDiv.textContent = "Loading due list for selected date...";
+        const rows = await fetchDueListFor(iso);
+        currentDueRows = rows;
+        renderDueTable(rows, []);
+        await runScanForRows(rows, `selected date (${iso})`);
+      } catch (e) {
+        infoDiv.textContent = "Error: " + e.toString();
+      }
+    });
+
+    scanWeekendBtn.addEventListener("click", async () => {
+      const base = dateInput.value;
+      if (!base) return alert("Pick a date first.");
+
+      try {
+        const { satISO, sunISO } = getWeekendDatesFromSelected(base);
+        infoDiv.textContent = `Loading weekend due lists (${satISO} + ${sunISO})...`;
+
+        const satRows = await fetchDueListFor(satISO);
+        const sunRows = await fetchDueListFor(sunISO);
+
+        // merge
+        const merged = [...satRows, ...sunRows];
+        currentDueRows = merged;
+
+        renderDueTable(merged, []);
+        await runScanForRows(merged, `weekend (${satISO} + ${sunISO})`);
+      } catch (e) {
+        infoDiv.textContent = "Error: " + e.toString();
+      }
+    });
 
     setYesterdayDefault();
   </script>
